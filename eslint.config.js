@@ -11,9 +11,7 @@ export default [
         ...globals.browser,
 
         // ✅ 사내 WebView 전역
-        M: 'readonly',
-        MNative: 'readonly',
-        MCore: 'readonly'
+        M: 'readonly'
       }
     }
   }
