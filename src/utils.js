@@ -29,7 +29,9 @@ export function downloadJson(jsonObj, filename = 'floorplan.domain.json') {
     console.log("Android Webview!!!!");
     const base64 = toBase64Utf8(jsonStr);
     let result = M.execute("exWNSaveBase64File", base64, filename, 'application/json');
-    console.log(result);
+    if(result != "" && result != null && result != undefined){
+      alert("Export 되었습니다.")
+    }
     // window.M.file.saveBase64({ base64, filename, mime: 'application/json' });
     return;
   }
