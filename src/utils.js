@@ -26,8 +26,10 @@ export function downloadJson(jsonObj, filename = 'floorplan.domain.json') {
 
   // ✅ (임시) 브릿지 이름이 다른 경우도 대비 (Morpheus 계열)
   if (isAndroidWebView()) {
+    console.log("Android Webview!!!!");
     const base64 = toBase64Utf8(jsonStr);
-    M.execute("exWNSaveBase64File", base64, filename, 'application/json');
+    let result = M.execute("exWNSaveBase64File", base64, filename, 'application/json');
+    console.log(result);
     // window.M.file.saveBase64({ base64, filename, mime: 'application/json' });
     return;
   }
