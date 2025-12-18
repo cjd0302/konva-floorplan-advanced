@@ -185,3 +185,23 @@ pre {
     height: 100vh;
   }
 }
+
+.item {
+  touch-action: none;          /* 터치 스크롤/줌과 충돌 방지 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dragGhost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 999999;
+  transform: translate(-9999px, -9999px);
+  background: rgba(17,24,39,0.85);
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}

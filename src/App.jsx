@@ -15,7 +15,9 @@ const CATALOG = [
   { catalogRef: 'furniture.sofa.1800', name: '소파 1800', category: 'Furniture', snapRules: [] }
 ]
 
-function isDoor(ref) { return ref?.startsWith('door.') }
+function isDoor(ref) {
+  return ref?.startsWith('door.')
+}
 
 export default function App() {
   const stageRef = useRef(null)
@@ -32,27 +34,72 @@ export default function App() {
   const [draftWall, setDraftWall] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
 
+  // ✅ Pointer 기반 Drag(삼성브라우저 대응)
+  const [dragCat, setDragCat] = useState(null) // CATALOG에서 집은 항목
+  const [ghost, setGhost] = useState({ x: -9999, y: -9999 })
+
   const [history, setHistory] = useState(() => {
     const h = createHistory(80)
     return push(h, snapshot({ walls: [], items: [], annotations: [] }))
   })
 
-  const meta = useMemo(() => ({
-    projectId: 'P-' + new Date().toISOString().slice(0,10).replaceAll('-','') + '-0001',
-    name: 'Konva Floorplan Advanced',
-    createdAt: new Date().toISOString(),
-    scale
-  }), [scale])
+  const meta = useMemo(
+    () => ({
+      projectId: 'P-' + new Date().toISOString().slice(0, 10).replaceAll('-', '') + '-0001',
+      name: 'Konva Floorplan Advanced',
+      createdAt: new Date().toISOString(),
+      scale
+    }),
+    [scale]
+  )
 
+  // ===== Utils =====
+  const commit = useCallback(
+    (nextWalls, nextItems, nextAnn = annotations) => {
+      setWalls(nextWalls)
+      setItems(nextItems)
+      setAnnotations(nextAnn)
+      setHistory((h) => push(h, snapshot({ walls: nextWalls, items: nextItems, annotations: nextAnn })))
+    },
+    [annotations]
+  )
+
+  const toStagePoint = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage) return { x: 0, y: 0 }
+    const pos = stage.getPointerPosition()
+    if (!pos) return { x: 0, y: 0 }
+    // scale은 Stage scaleX/scaleY로 반영되므로, pointerPosition은 화면좌표.
+    // 기존 로직 유지: 스케일로 나눠서 도면 좌표화.
+    return { x: pos.x / scale, y: pos.y / scale }
+  }, [scale])
+
+  // screen(client) 좌표 -> stage 좌표(스케일/패닝 포함) 변환
+  const screenToStagePoint = useCallback((clientX, clientY) => {
+    const stage = stageRef.current
+    if (!stage) return { x: 0, y: 0 }
+
+    const rect = stage.container().getBoundingClientRect()
+    const pointer = { x: clientX - rect.left, y: clientY - rect.top }
+
+    // stage의 transform(스케일/패닝) 반영
+    const tr = stage.getAbsoluteTransform().copy()
+    tr.invert()
+    return tr.point(pointer)
+  }, [])
+
+  // ===== Transformer attach =====
   useEffect(() => {
     const stage = stageRef.current
     const tr = trRef.current
     if (!stage || !tr) return
+
     if (!selectedId) {
       tr.nodes([])
       tr.getLayer()?.batchDraw()
       return
     }
+
     const node = stage.findOne('#' + selectedId)
     if (node) {
       tr.nodes([node])
@@ -63,8 +110,9 @@ export default function App() {
     }
   }, [selectedId, walls, items])
 
+  // ===== Undo/Redo =====
   const doUndo = useCallback(() => {
-    setHistory(h => {
+    setHistory((h) => {
       const nh = undo(h)
       if (nh !== h && nh.present) {
         const s = nh.present
@@ -78,7 +126,7 @@ export default function App() {
   }, [])
 
   const doRedo = useCallback(() => {
-    setHistory(h => {
+    setHistory((h) => {
       const nh = redo(h)
       if (nh !== h && nh.present) {
         const s = nh.present
@@ -108,31 +156,88 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [doUndo, doRedo])
 
-  const toStagePoint = useCallback(() => {
-    const stage = stageRef.current
-    if (!stage) return { x: 0, y: 0 }
-    const pos = stage.getPointerPosition()
-    if (!pos) return { x: 0, y: 0 }
-    return { x: pos.x / scale, y: pos.y / scale }
-  }, [scale])
+  // ===== Pointer Drag from Sidebar -> Canvas (Samsung Browser OK) =====
+  useEffect(() => {
+    if (!dragCat) return
 
-  const commit = useCallback((nextWalls, nextItems, nextAnn = annotations) => {
-    setWalls(nextWalls)
-    setItems(nextItems)
-    setAnnotations(nextAnn)
-    setHistory(h => push(h, snapshot({ walls: nextWalls, items: nextItems, annotations: nextAnn })))
-  }, [annotations])
-
-  const onPointerDown = useCallback((e) => {
-    const stage = e.target.getStage()
-    if (!stage) return
-    if (e.target === stage) setSelectedId(null)
-
-    if (tool === 'wall') {
-      const p = toStagePoint()
-      setDraftWall({ a: p, b: p, thickness: 12 })
+    const onMove = (e) => {
+      setGhost({ x: e.clientX + 10, y: e.clientY + 10 })
     }
-  }, [tool, toStagePoint])
+
+    const onUp = (e) => {
+      const host = containerRef.current
+      const stage = stageRef.current
+      if (!host || !stage) {
+        setDragCat(null)
+        setGhost({ x: -9999, y: -9999 })
+        return
+      }
+
+      const r = host.getBoundingClientRect()
+      const inside =
+        e.clientX >= r.left &&
+        e.clientX <= r.right &&
+        e.clientY >= r.top &&
+        e.clientY <= r.bottom
+
+      if (inside) {
+        const p = screenToStagePoint(e.clientX, e.clientY)
+
+        let next = {
+          id: uid('I'),
+          catalogRef: dragCat.catalogRef,
+          x: p.x,
+          y: p.y,
+          rotation: 0,
+          scaleX: 1,
+          scaleY: 1,
+          snap: null,
+          props: {}
+        }
+
+        if (dragCat.snapRules?.includes('wall')) {
+          const s = snapItemToWalls({ x: p.x, y: p.y }, walls, 45)
+          if (s) {
+            next = {
+              ...next,
+              x: s.point.x,
+              y: s.point.y,
+              rotation: isDoor(next.catalogRef) ? s.rotation : next.rotation,
+              snap: s.snap
+            }
+          }
+        }
+
+        commit(walls, [...items, next])
+      }
+
+      setDragCat(null)
+      setGhost({ x: -9999, y: -9999 })
+    }
+
+    window.addEventListener('pointermove', onMove, { passive: true })
+    window.addEventListener('pointerup', onUp)
+
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [dragCat, screenToStagePoint, walls, items, commit])
+
+  // ===== Drawing / Interaction =====
+  const onPointerDown = useCallback(
+    (e) => {
+      const stage = e.target.getStage()
+      if (!stage) return
+      if (e.target === stage) setSelectedId(null)
+
+      if (tool === 'wall') {
+        const p = toStagePoint()
+        setDraftWall({ a: p, b: p, thickness: 12 })
+      }
+    },
+    [tool, toStagePoint]
+  )
 
   const onPointerMove = useCallback(() => {
     if (tool !== 'wall' || !draftWall) return
@@ -146,81 +251,42 @@ export default function App() {
     const b = draftWall.b
     const dx = Math.abs(b.x - a.x)
     const dy = Math.abs(b.y - a.y)
-    if (dx + dy < 6) { setDraftWall(null); return }
+    if (dx + dy < 6) {
+      setDraftWall(null)
+      return
+    }
     const w = { id: uid('W'), a, b, thickness: draftWall.thickness }
     commit([...walls, w], items)
     setDraftWall(null)
   }, [tool, draftWall, walls, items, commit])
 
-  const onWheel = useCallback((e) => {
-    e.evt.preventDefault()
-    const stage = stageRef.current
-    if (!stage) return
-    const scaleBy = 1.05
-    const oldScale = scale
-    const pointer = stage.getPointerPosition()
-    if (!pointer) return
-    const direction = e.evt.deltaY > 0 ? -1 : 1
-    const newScale = clamp(direction > 0 ? oldScale * scaleBy : oldScale / scaleBy, 0.3, 3)
-    const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
-    }
-    setScale(newScale)
-    const newPos = {
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
-    }
-    stage.position(newPos)
-    stage.batchDraw()
-  }, [scale])
-
-  const onDragStartCatalog = (ev, item) => {
-    ev.dataTransfer.setData('application/x-catalogref', JSON.stringify(item))
-    ev.dataTransfer.effectAllowed = 'copy'
-  }
-
-  const onDrop = (ev) => {
-    ev.preventDefault()
-    const raw = ev.dataTransfer.getData('application/x-catalogref')
-    if (!raw) return
-    const cat = JSON.parse(raw)
-
-    const stage = stageRef.current
-    if (!stage) return
-
-    const rect = stage.container().getBoundingClientRect()
-    const x = (ev.clientX - rect.left - stage.x()) / scale
-    const y = (ev.clientY - rect.top - stage.y()) / scale
-
-    let next = {
-      id: uid('I'),
-      catalogRef: cat.catalogRef,
-      x, y,
-      rotation: 0,
-      scaleX: 1,
-      scaleY: 1,
-      snap: null,
-      props: {}
-    }
-
-    if (cat.snapRules?.includes('wall')) {
-      const s = snapItemToWalls({ x, y }, walls, 45)
-      if (s) {
-        next = {
-          ...next,
-          x: s.point.x,
-          y: s.point.y,
-          rotation: isDoor(next.catalogRef) ? s.rotation : next.rotation,
-          snap: s.snap
-        }
+  const onWheel = useCallback(
+    (e) => {
+      e.evt.preventDefault()
+      const stage = stageRef.current
+      if (!stage) return
+      const scaleBy = 1.05
+      const oldScale = scale
+      const pointer = stage.getPointerPosition()
+      if (!pointer) return
+      const direction = e.evt.deltaY > 0 ? -1 : 1
+      const newScale = clamp(direction > 0 ? oldScale * scaleBy : oldScale / scaleBy, 0.3, 3)
+      const mousePointTo = {
+        x: (pointer.x - stage.x()) / oldScale,
+        y: (pointer.y - stage.y()) / oldScale
       }
-    }
-    commit(walls, [...items, next])
-  }
+      setScale(newScale)
+      const newPos = {
+        x: pointer.x - mousePointTo.x * newScale,
+        y: pointer.y - mousePointTo.y * newScale
+      }
+      stage.position(newPos)
+      stage.batchDraw()
+    },
+    [scale]
+  )
 
-  const onDragOver = (ev) => ev.preventDefault()
-
+  // ===== Export / Import / Utilities =====
   const exportDomain = () => {
     const json = makeDomainJson({ meta, walls, items, annotations })
     downloadJson(json, 'floorplan.domain.json')
@@ -239,7 +305,10 @@ export default function App() {
 
   const deleteSelected = () => {
     if (!selectedId) return
-    commit(walls.filter(w => w.id !== selectedId), items.filter(it => it.id !== selectedId))
+    commit(
+      walls.filter((w) => w.id !== selectedId),
+      items.filter((it) => it.id !== selectedId)
+    )
     setSelectedId(null)
   }
 
@@ -265,27 +334,33 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="card">
-          <div className="row" style={{justifyContent:'space-between'}}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
             <strong>컴포넌트</strong>
             <span className="pill">Drag & Drop</span>
           </div>
-          <div className="hint" style={{marginTop:8}}>
-            문/싱크대는 벽 근처에 놓으면 <b>자동 스냅</b>됩니다.<br/>
-            Undo: <span className="kbd">Ctrl/Cmd+Z</span> / Redo: <span className="kbd">Ctrl/Cmd+Shift+Z</span>
+          <div className="hint" style={{ marginTop: 8 }}>
+            문/싱크대는 벽 근처에 놓으면 <b>자동 스냅</b>됩니다.
+            <br />
+            Undo: <span className="kbd">Ctrl/Cmd+Z</span> / Redo:{' '}
+            <span className="kbd">Ctrl/Cmd+Shift+Z</span>
           </div>
         </div>
 
         <div className="card">
-          {CATALOG.map(it => (
+          {CATALOG.map((it) => (
             <div
               key={it.catalogRef}
               className="item"
-              draggable
-              onDragStart={(ev) => onDragStartCatalog(ev, it)}
-              title="드래그해서 캔버스에 놓기"
+              onPointerDown={(e) => {
+                e.preventDefault()
+                setDragCat(it)
+                setGhost({ x: e.clientX + 10, y: e.clientY + 10 })
+              }}
+              title="누르고 이동해서 캔버스에 놓기"
             >
               <div>
-                <strong>{it.name}</strong><br/>
+                <strong>{it.name}</strong>
+                <br />
                 <small>{it.catalogRef}</small>
               </div>
               <span className="pill">{it.category}</span>
@@ -295,36 +370,54 @@ export default function App() {
 
         <div className="card">
           <strong>도면 JSON 미리보기</strong>
-          <div className="hint" style={{marginTop:8}}>
+          <div className="hint" style={{ marginTop: 8 }}>
             Export로 <code>floorplan.domain.json</code> 저장 후 Import로 복원합니다.
           </div>
-          <pre style={{marginTop:10}}>
-{JSON.stringify(makeDomainJson({ meta, walls, items, annotations }).stories[0].elements.slice(0, 6), null, 2)}
+          <pre style={{ marginTop: 10 }}>
+            {JSON.stringify(
+              makeDomainJson({ meta, walls, items, annotations }).stories[0].elements.slice(0, 6),
+              null,
+              2
+            )}
           </pre>
         </div>
       </aside>
 
       <main className="canvasWrap">
         <div className="toolbar">
-          <button className={"btn " + (tool==='select' ? 'primary' : '')} onClick={() => setTool('select')}>Select / Pan</button>
-          <button className={"btn " + (tool==='wall' ? 'primary' : '')} onClick={() => setTool('wall')}>Wall</button>
-          <span className="pill">Zoom: {Math.round(scale*100)}%</span>
+          <button className={'btn ' + (tool === 'select' ? 'primary' : '')} onClick={() => setTool('select')}>
+            Select / Pan
+          </button>
+          <button className={'btn ' + (tool === 'wall' ? 'primary' : '')} onClick={() => setTool('wall')}>
+            Wall
+          </button>
+          <span className="pill">Zoom: {Math.round(scale * 100)}%</span>
 
-          <button className="btn" onClick={doUndo} disabled={!canUndo(history)}>Undo</button>
-          <button className="btn" onClick={doRedo} disabled={!canRedo(history)}>Redo</button>
+          <button className="btn" onClick={doUndo} disabled={!canUndo(history)}>
+            Undo
+          </button>
+          <button className="btn" onClick={doRedo} disabled={!canRedo(history)}>
+            Redo
+          </button>
 
-          <button className="btn" onClick={deleteSelected} disabled={!selectedId}>Delete</button>
-          <button className="btn" onClick={clearAll}>Clear</button>
+          <button className="btn" onClick={deleteSelected} disabled={!selectedId}>
+            Delete
+          </button>
+          <button className="btn" onClick={clearAll}>
+            Clear
+          </button>
 
-          <span style={{flex:1}} />
+          <span style={{ flex: 1 }} />
 
-          <button className="btn primary" onClick={exportDomain}>Export domain.json</button>
-          <label className="btn" style={{display:'inline-flex', alignItems:'center', gap:8}}>
+          <button className="btn primary" onClick={exportDomain}>
+            Export domain.json
+          </button>
+          <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             Import domain.json
             <input
               type="file"
               accept="application/json"
-              style={{display:'none'}}
+              style={{ display: 'none' }}
               onChange={async (e) => {
                 const f = e.target.files?.[0]
                 if (f) await importDomain(f)
@@ -333,11 +426,15 @@ export default function App() {
             />
           </label>
 
-          <button className="btn" onClick={exportPNG}>Export PNG</button>
-          <button className="btn" onClick={exportPDF}>Export PDF</button>
+          <button className="btn" onClick={exportPNG}>
+            Export PNG
+          </button>
+          <button className="btn" onClick={exportPDF}>
+            Export PDF
+          </button>
         </div>
 
-        <div className="stageHost" ref={containerRef} onDrop={onDrop} onDragOver={onDragOver}>
+        <div className="stageHost" ref={containerRef}>
           <Stage
             ref={stageRef}
             width={containerRef.current?.clientWidth ?? CANVAS_W}
@@ -359,7 +456,7 @@ export default function App() {
             </Layer>
 
             <Layer id="wallsLayer">
-              {walls.map(w => (
+              {walls.map((w) => (
                 <Line
                   key={w.id}
                   id={w.id}
@@ -384,14 +481,14 @@ export default function App() {
             </Layer>
 
             <Layer id="itemsLayer">
-              {items.map(it => (
+              {items.map((it) => (
                 <ItemNode
                   key={it.id}
                   item={it}
                   selected={selectedId === it.id}
                   onSelect={() => setSelectedId(it.id)}
                   onCommit={(next) => {
-                    const nextItems = items.map(p => p.id === it.id ? next : p)
+                    const nextItems = items.map((p) => (p.id === it.id ? next : p))
                     commit(walls, nextItems)
                   }}
                   walls={walls}
@@ -401,7 +498,7 @@ export default function App() {
               <Transformer
                 ref={trRef}
                 rotateEnabled={true}
-                enabledAnchors={['top-left','top-right','bottom-left','bottom-right']}
+                enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
                 boundBoxFunc={(oldBox, newBox) => {
                   if (newBox.width < 30 || newBox.height < 20) return oldBox
                   return newBox
@@ -411,15 +508,26 @@ export default function App() {
           </Stage>
         </div>
       </main>
+
+      {/* Drag Ghost */}
+      {dragCat && (
+        <div className="dragGhost" style={{ transform: `translate(${ghost.x}px, ${ghost.y}px)` }}>
+          {dragCat.name}
+        </div>
+      )}
     </div>
   )
 }
 
 function snapshot({ walls, items, annotations }) {
   return {
-    walls: walls.map(w => ({ ...w, a: { ...w.a }, b: { ...w.b } })),
-    items: items.map(i => ({ ...i, props: { ...(i.props||{}) }, snap: i.snap ? { ...i.snap, at: i.snap.at ? { ...i.snap.at } : undefined } : null })),
-    annotations: (annotations || []).map(a => ({ ...a }))
+    walls: walls.map((w) => ({ ...w, a: { ...w.a }, b: { ...w.b } })),
+    items: items.map((i) => ({
+      ...i,
+      props: { ...(i.props || {}) },
+      snap: i.snap ? { ...i.snap, at: i.snap.at ? { ...i.snap.at } : undefined } : null
+    })),
+    annotations: (annotations || []).map((a) => ({ ...a }))
   }
 }
 
@@ -441,9 +549,10 @@ function ItemNode({ item, selected, onSelect, onCommit, walls }) {
   const label = item.catalogRef.split('.').slice(0, 2).join('.')
 
   const handleDragEnd = (e) => {
-    let nx = e.target.x()
-    let ny = e.target.y()
+    const nx = e.target.x()
+    const ny = e.target.y()
     let next = { ...item, x: nx, y: ny, snap: null }
+
     if (isSnapTarget) {
       const s = snapItemToWalls({ x: nx, y: ny }, walls, 45)
       if (s) {
@@ -458,6 +567,7 @@ function ItemNode({ item, selected, onSelect, onCommit, walls }) {
         if (item.catalogRef.startsWith('door.')) e.target.rotation(next.rotation)
       }
     }
+
     onCommit(next)
   }
 
