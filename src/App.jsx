@@ -410,10 +410,10 @@ export default function App() {
           <span style={{ flex: 1 }} />
 
           <button className="btn primary" onClick={exportDomain}>
-            Export domain.json
+            Export JSON 파일
           </button>
           <label className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            Import domain.json
+            Import JSON 파일
             <input
               type="file"
               accept="application/json"
