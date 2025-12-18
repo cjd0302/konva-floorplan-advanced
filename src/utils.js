@@ -14,9 +14,36 @@ export function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export function downloadJson(obj, filename) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  downloadBlob(blob, filename);
+export function downloadJson(jsonObj, filename = 'floorplan.domain.json') {
+  const jsonStr = typeof jsonObj === 'string' ? jsonObj : JSON.stringify(jsonObj, null, 2);
+
+  // ✅ Android WebView: 네이티브로 저장 요청 (blob 다운로드 금지)
+  // if (isAndroidWebView() && window.MNative?.saveBase64File) {
+  //   const base64 = toBase64Utf8(jsonStr);
+  //   window.MNative.saveBase64File(base64, filename, 'application/json');
+  //   return;
+  // }
+
+  // ✅ (임시) 브릿지 이름이 다른 경우도 대비 (Morpheus 계열)
+  if (isAndroidWebView()) {
+    const base64 = toBase64Utf8(jsonStr);
+    M.execute("exWNSaveBase64File", base64, filename, 'application/json');
+    // window.M.file.saveBase64({ base64, filename, mime: 'application/json' });
+    return;
+  }
+
+  // ✅ 일반 브라우저: 기존 방식 그대로 다운로드
+  const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
 }
 
 export async function readJsonFile(file) {
@@ -48,4 +75,22 @@ export function closestPointOnSegment(A, B, P) {
 export function angleDeg(A, B) {
   const rad = Math.atan2(B.y - A.y, B.x - A.x);
   return rad * 180 / Math.PI;
+}
+
+
+export function toBase64Utf8(str) {
+  // UTF-8 안전 base64 인코딩 (한글/특수문자 포함)
+  const utf8 = new TextEncoder().encode(str);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < utf8.length; i += chunk) {
+    binary += String.fromCharCode(...utf8.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+export function isAndroidWebView() {
+  const ua = navigator.userAgent || '';
+  // 대충: Android + wv(웹뷰) 또는 Version/... + Chrome/... 조합
+  return (/Android/i.test(ua) && (/\bwv\b/i.test(ua) || /Version\/\d+\.\d+.*Chrome\/\d+/i.test(ua))) || /Morpheus/i.test(ua);
 }
